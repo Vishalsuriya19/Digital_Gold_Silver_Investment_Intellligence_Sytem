@@ -20,11 +20,7 @@ from automation_engine.validator import (
     should_hold_sell,
 )
 
-from paper_trading.paper_trader import (
-    buy_metal,
-    sell_metal,
-    hold_trade,
-)
+from broker_api.broker_factory import get_broker
 
 
 OUTPUT_DIR = ROOT / "outputs"
@@ -86,6 +82,8 @@ def get_prediction_series(df, metal):
 
 def run_decision(metal="Gold"):
 
+    broker = get_broker()
+
     df = load_forecast()
 
     if df is None:
@@ -125,20 +123,19 @@ def run_decision(metal="Gold"):
         if current_price <= buy_price:
 
             if should_hold_buy(predictions):
-
-                hold_trade(metal)
-
                 return HOLD_BUY, "Prediction says wait"
 
-            buy_metal(
+            result, msg = broker.buy(
                 metal,
                 current_price,
                 grams
             )
 
-            set_state("WAITING_SELL")
+            if result:
+                set_state("WAITING_SELL")
+                return BUY, msg
 
-            return BUY, "Bought successfully"
+            return ERROR, msg
 
         return HOLD, "Waiting for buy price"
 
@@ -156,20 +153,19 @@ def run_decision(metal="Gold"):
         if current_price >= sell_price:
 
             if should_hold_sell(predictions):
-
-                hold_trade(metal)
-
                 return HOLD_SELL, "Prediction says wait"
 
-            sell_metal(
+            result, msg = broker.sell(
                 metal,
                 current_price,
                 grams
             )
 
-            set_state("WAITING_BUY")
+            if result:
+                set_state("WAITING_BUY")
+                return SELL, msg
 
-            return SELL, "Sold successfully"
+            return ERROR, msg
 
         return HOLD, "Waiting for sell price"
 

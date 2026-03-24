@@ -145,3 +145,4 @@ API Keys.txt
 
 # Logs
 *.log
+*.pkl

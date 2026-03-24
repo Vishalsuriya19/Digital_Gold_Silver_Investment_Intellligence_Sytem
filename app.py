@@ -321,7 +321,6 @@ if settings:
         save_settings(settings)
 
         st.success("Settings saved")
-
 # ==========================================
 # RUN AUTO ENGINE
 # ==========================================
@@ -335,6 +334,27 @@ if st.button("Set Auto Investment"):
     )
 
     st.success("Auto engine executed")
+
+# ==========================================
+# RUN LIVE ENGINE
+# ==========================================
+st.subheader("Live Price Engine")
+
+if st.button("Start Live Engine"):
+
+    subprocess.Popen(
+        ["python", "price_api/live_price_loop.py"]
+    )
+
+    st.success("Live engine started")
+
+import os
+
+if st.button("Stop Live Engine"):
+
+    os.system("taskkill /f /im python.exe")
+
+    st.warning("Live engine stopped")
 
 # ==========================================
 # WALLET VIEW
