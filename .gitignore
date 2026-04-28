@@ -1,3 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+env/
+venv/
+goldsilver_env/
+
+# Data files
+*.db
+*.sqlite
+*.sqlite3
+
+# Outputs and artifacts
+outputs/
+*.log
+
+# IDEs
+.vscode/
+
+# Secrets
+API Keys.txt
+
+# Jupyter
+.ipynb_checkpoints/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -145,4 +171,4 @@ API Keys.txt
 
 # Logs
 *.log
-*.pkl
+*.pklModels/*.pkl
