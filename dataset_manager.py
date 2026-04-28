@@ -1,121 +1,104 @@
-import pandas as pd
-import yfinance as yf
+from __future__ import annotations
+
+from datetime import datetime
 from pathlib import Path
-from datetime import datetime, timedelta
+
+import pandas as pd
+
+from data_fetcher import FACTOR_COLUMNS, build_historical_market_frame
 
 DATA_FILE = Path("gold_silver_data.csv")
-
 START_DATE = "2015-01-01"
-TODAY = datetime.today().strftime("%Y-%m-%d")
 
-OUNCE_TO_GRAM = 31.1035
-
-
-def extract_close(df):
-
-    if df is None or df.empty:
-        return pd.Series(dtype="float64")
-
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-
-    if "Close" in df.columns:
-        return df["Close"]
-
-    numeric = df.select_dtypes(include=["float64", "int64"])
-    return numeric.iloc[:, 0]
+DATASET_COLUMNS = ["Date", "Gold", "Silver", *FACTOR_COLUMNS]
 
 
-def download_full_history():
-
-    print("Downloading full history...")
-
-    try:
-        gold = yf.download("GC=F", start=START_DATE, end=TODAY, progress=True, timeout=30)
-        silver = yf.download("SI=F", start=START_DATE, end=TODAY, progress=True, timeout=30)
-        usdinr = yf.download("USDINR=X", start=START_DATE, end=TODAY, progress=True, timeout=30)
-    except Exception as e:
-        print(f"Error downloading data: {e}")
-        raise
-
-    gold_close = extract_close(gold)
-    silver_close = extract_close(silver)
-    usd_close = extract_close(usdinr)
-
-    # ✅ align by index (IMPORTANT FIX)
-    df = pd.concat(
-        [gold_close, silver_close, usd_close],
-        axis=1,
-        join="inner"
-    )
-
-    df.columns = ["GoldUSD", "SilverUSD", "USDINR"]
-
-    # convert to INR per gram
-    df["Gold"] = (df["GoldUSD"] * df["USDINR"]) / OUNCE_TO_GRAM
-    df["Silver"] = (df["SilverUSD"] * df["USDINR"]) / OUNCE_TO_GRAM
-
-    df = df[["Gold", "Silver"]]
-
-    df.reset_index(inplace=True)
-    df.rename(columns={"index": "Date"}, inplace=True)
-
-    return df
-
-
-def update_dataset():
-
+def load_local_dataset() -> pd.DataFrame:
     if not DATA_FILE.exists():
-
-        df = download_full_history()
-
-        df.to_csv(DATA_FILE, index=False)
-
-        print("Dataset created")
-
-        return
+        return pd.DataFrame(columns=DATASET_COLUMNS)
 
     df = pd.read_csv(DATA_FILE)
+    if df.empty:
+        return pd.DataFrame(columns=DATASET_COLUMNS)
 
-    last_date = pd.to_datetime(df["Date"], format='ISO8601').max()
+    return normalize_dataset(df)
 
-    next_day = (last_date + timedelta(days=1)).strftime("%Y-%m-%d")
 
-    gold = yf.download("GC=F", start=next_day, end=TODAY, progress=True, timeout=30)
-    silver = yf.download("SI=F", start=next_day, end=TODAY, progress=True, timeout=30)
-    usdinr = yf.download("USDINR=X", start=next_day, end=TODAY, progress=True, timeout=30)
+def normalize_dataset(df: pd.DataFrame) -> pd.DataFrame:
+    dataset = df.copy()
 
-    if gold.empty:
-        print("No new data")
-        return
+    if "Date" not in dataset.columns:
+        raise ValueError("Dataset must contain a 'Date' column.")
 
-    gold_close = extract_close(gold)
-    silver_close = extract_close(silver)
-    usd_close = extract_close(usdinr)
+    dataset["Date"] = pd.to_datetime(dataset["Date"], errors="coerce")
+    dataset = dataset.dropna(subset=["Date"])
 
-    new_df = pd.concat(
-        [gold_close, silver_close, usd_close],
-        axis=1,
-        join="inner"
+    for column in DATASET_COLUMNS:
+        if column == "Date":
+            continue
+        if column not in dataset.columns:
+            dataset[column] = pd.NA
+        dataset[column] = pd.to_numeric(dataset[column], errors="coerce")
+
+    dataset = dataset.sort_values("Date").drop_duplicates("Date", keep="last")
+    dataset = dataset.ffill().bfill()
+    dataset["Date"] = dataset["Date"].dt.strftime("%Y-%m-%d")
+
+    return dataset[DATASET_COLUMNS]
+
+
+def merge_datasets(local_df: pd.DataFrame, refreshed_df: pd.DataFrame) -> pd.DataFrame:
+    if local_df.empty:
+        return normalize_dataset(refreshed_df)
+    if refreshed_df.empty:
+        return normalize_dataset(local_df)
+
+    combined = pd.concat([local_df, refreshed_df], ignore_index=True, sort=False)
+    return normalize_dataset(combined)
+
+
+def save_dataset(df: pd.DataFrame, sync_sqlite: bool = True) -> pd.DataFrame:
+    dataset = normalize_dataset(df)
+    DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
+    dataset.to_csv(DATA_FILE, index=False)
+
+    if sync_sqlite:
+        try:
+            from sync_csv_to_sqlite import sync_csv_to_db
+
+            sync_csv_to_db(dataset)
+        except Exception as exc:
+            print(f"Warning: SQLite sync skipped: {exc}")
+
+    return dataset
+
+
+def refresh_dataset() -> pd.DataFrame:
+    existing_df = load_local_dataset()
+    refreshed_df = build_historical_market_frame(
+        start_date=START_DATE,
+        end_date=datetime.today().strftime("%Y-%m-%d"),
+        fallback_df=existing_df,
     )
 
-    new_df.columns = ["GoldUSD", "SilverUSD", "USDINR"]
+    if refreshed_df.empty and existing_df.empty:
+        raise RuntimeError("Unable to build dataset from remote or local sources.")
 
-    new_df["Gold"] = (new_df["GoldUSD"] * new_df["USDINR"]) / OUNCE_TO_GRAM
-    new_df["Silver"] = (new_df["SilverUSD"] * new_df["USDINR"]) / OUNCE_TO_GRAM
+    combined = merge_datasets(existing_df, refreshed_df)
+    return save_dataset(combined)
 
-    new_df = new_df[["Gold", "Silver"]]
 
-    new_df.reset_index(inplace=True)
-    new_df.rename(columns={"index": "Date"}, inplace=True)
+def update_dataset() -> pd.DataFrame:
+    dataset_before = load_local_dataset()
+    dataset_after = refresh_dataset()
 
-    df = pd.concat([df, new_df])
+    action = "created" if dataset_before.empty else "updated"
+    print(
+        f"Dataset {action}: {len(dataset_after)} rows through "
+        f"{dataset_after['Date'].iloc[-1]}"
+    )
 
-    df.drop_duplicates("Date", inplace=True)
-
-    df.to_csv(DATA_FILE, index=False)
-
-    print("Dataset updated")
+    return dataset_after
 
 
 if __name__ == "__main__":

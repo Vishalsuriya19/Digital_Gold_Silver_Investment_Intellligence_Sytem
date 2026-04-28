@@ -1,85 +1,71 @@
-# =====================================
-# MODEL TRAINER - SARIMA (1g Digital Gold & Silver)
-# =====================================
+from __future__ import annotations
+
+from pathlib import Path
 
 import pandas as pd
-import joblib
-from pathlib import Path
-from statsmodels.tsa.statespace.sarimax import SARIMAX
 
-DATA_PATH = Path("gold_silver_data.csv")
-MODEL_DIR = Path("Models")
-OUTPUT_DIR = Path("Outputs")
+from Models.gold_rate_sarigma_model import train_and_forecast as train_sarimax
+from Models.gold_silver_elasticnet_model import main as train_elasticnet
+from Models.gold_silver_lstm_model import main as train_lstm
+from Models.gold_silver_xgboost_model import train_and_forecast as train_xgboost
+from data_fetcher import FACTOR_COLUMNS
 
-MODEL_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
-
-FORECAST_DAYS = 30
+DATA_FILE = Path("gold_silver_data.csv")
 
 
-def train_and_forecast():
+def validate_dataset() -> pd.DataFrame:
+    if not DATA_FILE.exists():
+        raise FileNotFoundError(f"Dataset not found: {DATA_FILE}")
 
-    print("Loading dataset...")
-    df = pd.read_csv(DATA_PATH)
+    df = pd.read_csv(DATA_FILE)
+    required_columns = {"Date", "Gold", "Silver"}
+    missing = required_columns.difference(df.columns)
+    if missing:
+        raise ValueError(f"Dataset missing required columns: {sorted(missing)}")
 
-    df["Date"] = pd.to_datetime(df["Date"], format='ISO8601')
-    df.set_index("Date", inplace=True)
+    available_factors = [column for column in FACTOR_COLUMNS if column in df.columns]
+    print(f"Available factor columns: {', '.join(available_factors) if available_factors else 'none'}")
+    return df
 
-    df = df.asfreq("D")
-    df.ffill(inplace=True)
 
-    # =========================
-    # GOLD MODEL
-    # =========================
-    print("Training Gold SARIMA model...")
+def train_all_models() -> dict[str, bool]:
+    validate_dataset()
 
-    gold_model = SARIMAX(
-        df["Gold"],
-        order=(1, 1, 1),
-        seasonal_order=(1, 1, 1, 7),
-        enforce_stationarity=False,
-        enforce_invertibility=False
-    ).fit(disp=False)
+    training_steps = [
+        ("SARIMAX", train_sarimax, True),
+        ("LSTM", train_lstm, False),
+        ("XGBoost", train_xgboost, True),
+        ("ElasticNet", train_elasticnet, False),
+    ]
 
-    gold_forecast = gold_model.get_forecast(steps=FORECAST_DAYS)
-    gold_pred = gold_forecast.predicted_mean
+    results: dict[str, bool] = {}
+    critical_failures: list[str] = []
 
-    joblib.dump(gold_model, MODEL_DIR / "sarima_gold.pkl")
+    for name, trainer, critical in training_steps:
+        print(f"\n=== TRAINING {name} ===")
+        try:
+            trainer()
+            results[name] = True
+            print(f"[OK] {name} completed")
+        except Exception as exc:
+            results[name] = False
+            print(f"[ERROR] {name} failed: {exc}")
+            if critical:
+                critical_failures.append(name)
 
-    # =========================
-    # SILVER MODEL
-    # =========================
-    print("Training Silver SARIMA model...")
+    successful_models = sum(results.values())
+    if critical_failures:
+        raise RuntimeError(f"Critical models failed: {', '.join(critical_failures)}")
 
-    silver_model = SARIMAX(
-        df["Silver"],
-        order=(1, 1, 1),
-        seasonal_order=(1, 1, 1, 7),
-        enforce_stationarity=False,
-        enforce_invertibility=False
-    ).fit(disp=False)
+    if successful_models < 2:
+        raise RuntimeError("Need at least two successful models for ensemble generation.")
 
-    silver_forecast = silver_model.get_forecast(steps=FORECAST_DAYS)
-    silver_pred = silver_forecast.predicted_mean
+    return results
 
-    joblib.dump(silver_model, MODEL_DIR / "sarima_silver.pkl")
 
-    # =========================
-    # SAVE PREDICTIONS
-    # =========================
-    predictions = pd.DataFrame({
-        "Date": gold_pred.index,
-        "Gold_Predicted": gold_pred.values,
-        "Silver_Predicted": silver_pred.values
-    })
-
-    # Save predictions in both expected formats for compatibility
-    predictions.to_csv(OUTPUT_DIR / "sarima_predictions.csv", index=False)
-    predictions.to_csv(OUTPUT_DIR / "sarima_forecast.csv", index=False)
-
-    print("SARIMA training & forecasting completed.")
-    return True
+def main() -> dict[str, bool]:
+    return train_all_models()
 
 
 if __name__ == "__main__":
-    train_and_forecast()
+    main()

@@ -35,8 +35,14 @@ def run_auto_engine():
         if signal == BUY:
             print(f"{metal} BUY executed")
 
+        elif signal == STRONG_BUY:
+            print(f"{metal} STRONG BUY executed")
+
         elif signal == SELL:
             print(f"{metal} SELL executed")
+
+        elif signal == STRONG_SELL:
+            print(f"{metal} STRONG SELL executed")
 
         elif signal == HOLD_BUY:
             print(f"{metal} HOLD BUY")
