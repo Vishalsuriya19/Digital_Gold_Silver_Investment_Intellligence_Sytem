@@ -172,3 +172,9 @@ API Keys.txt
 # Logs
 *.log
 *.pklModels/*.pkl
+Models/*.pkl
+goldsilver_env/
+venv/
+venv/
+*.pyc
+__pycache__/
